@@ -23,8 +23,8 @@ var errInvalidMaxPoints = errors.New("max_points must be between 0 and 20000")
 
 type getActivityStreamsArgs struct {
 	ActivityID string `json:"activity_id"          jsonschema:"activity ID to retrieve streams for"`
-	Types      string `json:"types,omitempty"      jsonschema:"comma-separated stream types, e.g. time,distance,altitude,heartrate,velocity_smooth,cadence,grade_smooth,watts,latlng (default: time,distance,altitude,heartrate,velocity_smooth,cadence,grade_smooth)"`
-	MaxPoints  int    `json:"max_points,omitempty" jsonschema:"downsample every stream to at most this many evenly spaced points (default 1000, 0 = default, max 20000)"`
+	Types      string `json:"types,omitempty"      jsonschema:"comma-separated stream types (e.g. heartrate,altitude,watts,latlng); default: core set"`
+	MaxPoints  int    `json:"max_points,omitempty" jsonschema:"max points per stream after downsampling (default 1000, max 20000)"`
 }
 
 type activityStream struct {

@@ -43,12 +43,14 @@ func TestValidateEventTarget(t *testing.T) {
 	t.Parallel()
 
 	for _, ok := range []string{"", "AUTO", "POWER", "HR", "PACE"} {
-		if err := validateEventTarget(ok); err != nil {
+		err := validateEventTarget(ok)
+		if err != nil {
 			t.Errorf("validateEventTarget(%q): unexpected error: %v", ok, err)
 		}
 	}
 
-	if err := validateEventTarget("SPEED"); err == nil {
+	err := validateEventTarget("SPEED")
+	if err == nil {
 		t.Error("validateEventTarget(\"SPEED\"): expected error")
 	}
 }

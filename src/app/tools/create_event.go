@@ -13,14 +13,14 @@ import (
 
 type createEventArgs struct {
 	Name           string   `json:"name"                    jsonschema:"event name"`
-	StartDateLocal string   `json:"start_date_local"        jsonschema:"start date as yyyy-MM-dd, or with time as yyyy-MM-ddTHH:mm[:ss] (local time)"`
-	Category       string   `json:"category"                jsonschema:"event category (WORKOUT, NOTE, RACE, SEASON_START)"`
+	StartDateLocal string   `json:"start_date_local"        jsonschema:"start date yyyy-MM-dd or yyyy-MM-ddTHH:mm[:ss] (local)"`
+	Category       string   `json:"category"                jsonschema:"category: WORKOUT, NOTE, RACE, SEASON_START"`
 	Type           string   `json:"type,omitempty"          jsonschema:"sport type (e.g. Ride or Run or Swim)"`
 	Description    string   `json:"description,omitempty"   jsonschema:"event description or notes"`
 	MovingTime     *float64 `json:"moving_time,omitempty"   jsonschema:"planned moving time in seconds"`
 	Distance       *float64 `json:"distance,omitempty"      jsonschema:"planned distance in meters"`
 	TrainingLoad   *float64 `json:"training_load,omitempty" jsonschema:"planned training load (TSS or similar)"`
-	Target         string   `json:"target,omitempty"        jsonschema:"workout target metric for structured steps: AUTO, POWER, HR or PACE"`
+	Target         string   `json:"target,omitempty"        jsonschema:"step target: AUTO, POWER, HR or PACE"`
 }
 
 // NewCreateEventTool returns a ToolRegistration that registers the create_event tool on an MCP server.
