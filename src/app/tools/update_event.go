@@ -16,7 +16,7 @@ type updateEventArgs struct {
 	EventID        string   `json:"event_id"                   jsonschema:"the event ID to update"`
 	Name           string   `json:"name,omitempty"             jsonschema:"event name"`
 	Description    string   `json:"description,omitempty"      jsonschema:"event description or notes"`
-	StartDateLocal string   `json:"start_date_local,omitempty" jsonschema:"start date yyyy-MM-dd or yyyy-MM-ddTHH:mm[:ss] (local)"`
+	StartDateLocal string   `json:"start_date_local,omitempty" jsonschema:"yyyy-MM-dd or yyyy-MM-ddTHH:mm[:ss]"`
 	Category       string   `json:"category,omitempty"         jsonschema:"event category (WORKOUT, NOTE, RACE)"`
 	Type           string   `json:"type,omitempty"             jsonschema:"sport type (e.g. Ride or Run or Swim)"`
 	MovingTime     *float64 `json:"moving_time,omitempty"      jsonschema:"planned moving time in seconds"`

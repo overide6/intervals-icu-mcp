@@ -13,7 +13,7 @@ import (
 
 type createEventArgs struct {
 	Name           string   `json:"name"                    jsonschema:"event name"`
-	StartDateLocal string   `json:"start_date_local"        jsonschema:"start date yyyy-MM-dd or yyyy-MM-ddTHH:mm[:ss] (local)"`
+	StartDateLocal string   `json:"start_date_local"        jsonschema:"yyyy-MM-dd or yyyy-MM-ddTHH:mm[:ss]"`
 	Category       string   `json:"category"                jsonschema:"category: WORKOUT, NOTE, RACE, SEASON_START"`
 	Type           string   `json:"type,omitempty"          jsonschema:"sport type (e.g. Ride or Run or Swim)"`
 	Description    string   `json:"description,omitempty"   jsonschema:"event description or notes"`
