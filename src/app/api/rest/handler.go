@@ -36,6 +36,7 @@ const (
 	authCodeLength     = 32
 	signedStateParts   = 2
 	githubAuthorizeURL = "https://github.com/login/oauth/authorize"
+	errCodeServerError = "server_error"
 
 	grantTypeAuthorizationCode = "authorization_code"
 	grantTypeRefreshToken      = "refresh_token"
@@ -188,14 +189,14 @@ func (h *Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	signedState, err := h.signState(authState)
 	if err != nil {
-		h.redirectError(w, r, authState, "server_error", "internal error")
+		h.redirectError(w, r, authState, errCodeServerError, "internal error")
 
 		return
 	}
 
 	ghURL, err := url.Parse(githubAuthorizeURL)
 	if err != nil {
-		h.redirectError(w, r, authState, "server_error", "internal error")
+		h.redirectError(w, r, authState, errCodeServerError, "internal error")
 
 		return
 	}
@@ -248,7 +249,7 @@ func validateAuthorizeParams(query url.Values) (authorizeState, *oauthValidation
 	nonce, err := generateRandomString(stateNonceLength)
 	if err != nil {
 		return authorizeState{}, &oauthValidationError{
-			"server_error", "internal error", http.StatusInternalServerError,
+			errCodeServerError, "internal error", http.StatusInternalServerError,
 		}
 	}
 
@@ -308,7 +309,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	authCode, err := generateRandomString(authCodeLength)
 	if err != nil {
-		h.redirectError(w, r, authState, "server_error", "internal error")
+		h.redirectError(w, r, authState, errCodeServerError, "internal error")
 
 		return
 	}
@@ -323,7 +324,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Scopes:              parseScopes(authState.Scope),
 		ExpiresAt:           time.Now().Add(authCodeTTL),
 	}); err != nil {
-		h.redirectError(w, r, authState, "server_error", "too many pending authorization codes")
+		h.redirectError(w, r, authState, errCodeServerError, "too many pending authorization codes")
 
 		return
 	}
@@ -435,7 +436,7 @@ func (h *Handler) resolveGitHubUser(
 		slog.Error("GitHub code exchange failed", "error", err)
 
 		return nil, &oauthValidationError{
-			"server_error", "failed to exchange GitHub code", http.StatusInternalServerError,
+			errCodeServerError, "failed to exchange GitHub code", http.StatusInternalServerError,
 		}
 	}
 
@@ -444,7 +445,7 @@ func (h *Handler) resolveGitHubUser(
 		slog.Error("GitHub user fetch failed", "error", err)
 
 		return nil, &oauthValidationError{
-			"server_error", "failed to fetch GitHub user", http.StatusInternalServerError,
+			errCodeServerError, "failed to fetch GitHub user", http.StatusInternalServerError,
 		}
 	}
 
@@ -587,7 +588,7 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 
 	newRefreshTokenValue, err := auth.IssueRefreshToken()
 	if err != nil {
-		writeOAuthError(w, "server_error", "internal error", http.StatusInternalServerError)
+		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
 
 		return
 	}
@@ -600,7 +601,7 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 	refreshTok, err := h.store.RotateRefreshToken(tokenValue, clientID, now, newRefreshToken)
 	if err != nil {
 		if errors.Is(err, auth.ErrMaxRefreshTokensReached) {
-			writeOAuthError(w, "server_error", "too many active refresh tokens", http.StatusServiceUnavailable)
+			writeOAuthError(w, errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable)
 
 			return
 		}
@@ -614,7 +615,7 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 		h.jwtSecret, h.issuer, accessTokenTTL, refreshTok.GitHubUsername, refreshTok.Scopes,
 	)
 	if err != nil {
-		writeOAuthError(w, "server_error", "internal error", http.StatusInternalServerError)
+		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
 
 		return
 	}
@@ -658,7 +659,7 @@ func (h *Handler) issueTokenPair(
 ) {
 	accessToken, err := auth.IssueAccessToken(h.jwtSecret, h.issuer, accessTokenTTL, username, scopes)
 	if err != nil {
-		writeOAuthError(w, "server_error", "internal error", http.StatusInternalServerError)
+		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
 
 		return
 	}
@@ -668,7 +669,7 @@ func (h *Handler) issueTokenPair(
 	if slices.Contains(grantTypes, grantTypeRefreshToken) {
 		refreshToken, err = auth.IssueRefreshToken()
 		if err != nil {
-			writeOAuthError(w, "server_error", "internal error", http.StatusInternalServerError)
+			writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
 
 			return
 		}
@@ -680,7 +681,7 @@ func (h *Handler) issueTokenPair(
 			Scopes:        scopes,
 			ExpiresAt:     time.Now().Add(refreshTokenTTL),
 		}); err != nil {
-			writeOAuthError(w, "server_error", "too many active refresh tokens", http.StatusServiceUnavailable)
+			writeOAuthError(w, errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable)
 
 			return
 		}
@@ -722,7 +723,7 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	clientID, err := uuid.NewV4()
 	if err != nil {
-		writeOAuthError(w, "server_error", "internal error", http.StatusInternalServerError)
+		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
 
 		return
 	}
@@ -736,7 +737,7 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = h.store.SaveClient(client); err != nil {
-		writeOAuthError(w, "server_error", "too many registered clients", http.StatusServiceUnavailable)
+		writeOAuthError(w, errCodeServerError, "too many registered clients", http.StatusServiceUnavailable)
 
 		return
 	}
@@ -966,7 +967,7 @@ func writeOAuthError(w http.ResponseWriter, errCode, description string, status 
 // returned by GitHub with safe defaults to prevent content injection.
 func sanitizeGitHubError(errCode, description string) (string, string) {
 	if !isKnownOAuthError(errCode) {
-		return "server_error", genericErrorDescription
+		return errCodeServerError, genericErrorDescription
 	}
 
 	if !isCleanDescription(description) {
