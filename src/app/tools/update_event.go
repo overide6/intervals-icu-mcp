@@ -16,12 +16,13 @@ type updateEventArgs struct {
 	EventID        string   `json:"event_id"                   jsonschema:"the event ID to update"`
 	Name           string   `json:"name,omitempty"             jsonschema:"event name"`
 	Description    string   `json:"description,omitempty"      jsonschema:"event description or notes"`
-	StartDateLocal string   `json:"start_date_local,omitempty" jsonschema:"start date in yyyy-MM-dd format"`
+	StartDateLocal string   `json:"start_date_local,omitempty" jsonschema:"start date as yyyy-MM-dd, or with time as yyyy-MM-ddTHH:mm[:ss] (local time)"`
 	Category       string   `json:"category,omitempty"         jsonschema:"event category (WORKOUT, NOTE, RACE)"`
 	Type           string   `json:"type,omitempty"             jsonschema:"sport type (e.g. Ride or Run or Swim)"`
 	MovingTime     *float64 `json:"moving_time,omitempty"      jsonschema:"planned moving time in seconds"`
 	Distance       *float64 `json:"distance,omitempty"         jsonschema:"planned distance in meters"`
 	TrainingLoad   *float64 `json:"training_load,omitempty"    jsonschema:"planned training load (TSS or similar)"`
+	Target         string   `json:"target,omitempty"           jsonschema:"workout target metric for structured steps: AUTO, POWER, HR or PACE"`
 }
 
 type updateEventPayload struct {
@@ -33,6 +34,7 @@ type updateEventPayload struct {
 	MovingTime     *float64 `json:"moving_time,omitempty"`
 	Distance       *float64 `json:"distance,omitempty"`
 	TrainingLoad   *float64 `json:"training_load,omitempty"`
+	Target         string   `json:"target,omitempty"`
 }
 
 // NewUpdateEventTool returns a ToolRegistration that registers the update_event tool on an MCP server.
@@ -49,10 +51,17 @@ func NewUpdateEventTool(apiClient *intervals.Client) ToolRegistration {
 				}
 
 				if args.StartDateLocal != "" {
-					err := validateDateFormat(args.StartDateLocal)
+					normalized, err := normalizeEventDateTime(args.StartDateLocal)
 					if err != nil {
 						return nil, nil, err
 					}
+
+					args.StartDateLocal = normalized
+				}
+
+				err := validateEventTarget(args.Target)
+				if err != nil {
+					return nil, nil, err
 				}
 
 				payload := updateEventPayload{
@@ -64,6 +73,7 @@ func NewUpdateEventTool(apiClient *intervals.Client) ToolRegistration {
 					MovingTime:     args.MovingTime,
 					Distance:       args.Distance,
 					TrainingLoad:   args.TrainingLoad,
+					Target:         args.Target,
 				}
 
 				payloadBytes, err := json.Marshal(payload)

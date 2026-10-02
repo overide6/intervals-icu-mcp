@@ -8,6 +8,8 @@ var Module = fx.Module("tools", //nolint:gochecknoglobals // fx.Module as packag
 	fx.Provide(fx.Annotate(NewGetAthleteProfileTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewGetActivitiesTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewGetActivityDetailsTool, fx.ResultTags(`group:"mcp_tools"`))),
+	fx.Provide(fx.Annotate(NewGetActivityStreamsTool, fx.ResultTags(`group:"mcp_tools"`))),
+	fx.Provide(fx.Annotate(NewGetActivityIntervalsTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewGetEventsTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewCreateEventTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewUpdateEventTool, fx.ResultTags(`group:"mcp_tools"`))),
