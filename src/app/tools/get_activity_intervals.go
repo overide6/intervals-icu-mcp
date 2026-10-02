@@ -32,7 +32,7 @@ var groupFields = []string{ //nolint:gochecknoglobals // immutable field allowli
 }
 
 type getActivityIntervalsArgs struct {
-	ActivityID string `json:"activity_id"   jsonschema:"activity ID to retrieve laps/intervals for"`
+	ActivityID string `json:"activity_id"          jsonschema:"activity ID to retrieve laps/intervals for"`
 	AllFields  bool   `json:"all_fields,omitempty" jsonschema:"return every field from intervals.icu (default false)"`
 }
 
