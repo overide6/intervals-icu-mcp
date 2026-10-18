@@ -73,7 +73,8 @@
 - `.dockerignore` is an exclusion-based ignore file. Files not explicitly excluded are included in the build context. The effective inclusions are `src/`, `go.mod`, `go.sum`, and `README.md`. New root-level files should be added to `.dockerignore` unless needed at build time.
 - `Makefile` provides local developer helpers: `make build` (native-arch, `--load`), `make push` (multi-arch `linux/amd64,linux/arm64`, pushes `<image>:<VERSION>`), `make test`, `make lint`, `make tidy`. Variables: `IMAGE`, `VERSION`, `DI_VERSION`, `COMPILED_AT`, `PLATFORMS`.
 - `.github/workflows/ci.yml` runs on `pull_request` and `push` to `main`: three parallel jobs (test, lint, multi-arch docker build without push). Uses pinned action SHAs. Go 1.25.
-- `.github/workflows/release.yml` runs on `release: published` and `workflow_dispatch` (with optional `version` input). Resolves the tag, checks out at that ref, logs in to GHCR with `GITHUB_TOKEN`, uses `docker/metadata-action` to produce semver tags (`X.Y.Z`, `X.Y`, `latest`), and builds+pushes a multi-arch image to `ghcr.io/0xalexb/intervals-icu-mcp`.
+- `.github/workflows/release.yml` runs on `release: published` and `workflow_dispatch` (with optional `version` input). Resolves the tag, checks out at that ref, logs in to GHCR with `GITHUB_TOKEN`, uses `docker/metadata-action` to produce semver tags (`X.Y.Z`, `X.Y`, `latest`), and builds+pushes a multi-arch image to `ghcr.io/overide6/intervals-icu-mcp`.
+- `.github/workflows/fork-image.yml` runs on `push` to `main` and `workflow_dispatch`: runs the tests, then builds+pushes a multi-arch image to `ghcr.io/<repository>` tagged `latest` and the short commit SHA (`VERSION=fork-<sha>`).
 - Release procedure: cut a GitHub Release off a `vX.Y.Z` tag; the workflow builds and publishes the image. `workflow_dispatch` with an explicit `version` input re-publishes an existing tag.
 
 ## Linting Conventions
