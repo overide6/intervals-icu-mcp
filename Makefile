@@ -1,4 +1,4 @@
-IMAGE ?= ghcr.io/0xalexb/intervals-icu-mcp
+IMAGE ?= ghcr.io/overide6/intervals-icu-mcp
 VERSION ?= dev
 DI_VERSION ?= 0.5.0
 COMPILED_AT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

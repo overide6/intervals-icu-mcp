@@ -112,7 +112,7 @@ go build -ldflags "-X github.com/0xalexb/hjarta-di.Version=1.0.0 -X github.com/0
 Pull the latest image:
 
 ```sh
-docker pull ghcr.io/0xalexb/intervals-icu-mcp:latest
+docker pull ghcr.io/overide6/intervals-icu-mcp:latest
 ```
 
 Run in streamable mode (default CMD):
@@ -123,7 +123,7 @@ docker run --rm -p 8080:8080 \
   -e INTERVALS_ATHLETE_ID=... \
   -e GITHUB_CLIENT_SECRET=... \
   -e JWT_SECRET=... \
-  ghcr.io/0xalexb/intervals-icu-mcp:latest \
+  ghcr.io/overide6/intervals-icu-mcp:latest \
   --github-client-id <id> \
   --auth-issuer https://mcp.example.com
 ```
@@ -134,7 +134,7 @@ Run in stdio mode (for MCP clients that manage the process):
 docker run -i --rm \
   -e INTERVALS_API_KEY=... \
   -e INTERVALS_ATHLETE_ID=... \
-  ghcr.io/0xalexb/intervals-icu-mcp:latest \
+  ghcr.io/overide6/intervals-icu-mcp:latest \
   --transport stdio
 ```
 
