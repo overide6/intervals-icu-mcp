@@ -21,6 +21,14 @@ var (
 	errMissingCategory   = errors.New("category is required")
 	errInvalidDateTime   = errors.New("unsupported date/time format")
 	errInvalidTarget     = errors.New("invalid target")
+
+	errMissingSettingsID     = errors.New("settings_id is required")
+	errInvalidSettingsID     = errors.New("invalid settings_id")
+	errSettingsIDMismatch    = errors.New("sport settings ID mismatch")
+	errNoSportSettingsFields = errors.New("at least one of ftp, lthr, max_hr or threshold_pace is required")
+	errFieldNotWritable      = errors.New("field is not writable")
+	errInvalidPace           = errors.New("invalid threshold_pace")
+	errOutOfRange            = errors.New("value out of range")
 )
 
 func validateDateFormat(s string) error {
