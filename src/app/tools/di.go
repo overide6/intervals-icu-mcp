@@ -19,4 +19,5 @@ var Module = fx.Module("tools", //nolint:gochecknoglobals // fx.Module as packag
 	fx.Provide(fx.Annotate(NewGetWellnessTrendTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewListSportSettingsTool, fx.ResultTags(`group:"mcp_tools"`))),
 	fx.Provide(fx.Annotate(NewUpdateSportSettingsTool, fx.ResultTags(`group:"mcp_tools"`))),
+	fx.Provide(fx.Annotate(NewUpdateWellnessTool, fx.ResultTags(`group:"mcp_tools"`))),
 )

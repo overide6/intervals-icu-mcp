@@ -106,6 +106,7 @@ go build -ldflags "-X github.com/0xalexb/hjarta-di.Version=1.0.0 -X github.com/0
 | `get_wellness_trend` | Returns wellness data over a date range. | `oldest` (required), `newest` (required) |
 | `list_sport_settings` | Lists sport settings (ID, activity types, ftp, lthr, max_hr, threshold pace). | `all_fields` (optional) |
 | `update_sport_settings` | Partially updates one sport settings entry. Only `ftp`, `lthr`, `max_hr` and `threshold_pace` are writable (zones never); returns values before and after the write. | `settings_id` (required); `ftp`, `lthr`, `max_hr`, `threshold_pace` as `m:ss` per km (optional) |
+| `update_wellness` | Updates subjective wellness values for a date; only provided fields are sent. Scale 1 = best, 4 = worst (fatigue: 2 = average; mood: 3 = ok; motivation: 4 = low). | `date` (required); `soreness`, `fatigue`, `stress`, `mood`, `motivation`, `injury` (1-4), `comments`, `locked` (at least one required) |
 
 ## Docker
 
