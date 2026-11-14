@@ -29,6 +29,9 @@ var (
 	errFieldNotWritable      = errors.New("field is not writable")
 	errInvalidPace           = errors.New("invalid threshold_pace")
 	errOutOfRange            = errors.New("value out of range")
+
+	errNoWellnessFields = errors.New(
+		"at least one of soreness, fatigue, stress, mood, motivation, injury, comments or locked is required")
 )
 
 func validateDateFormat(s string) error {
