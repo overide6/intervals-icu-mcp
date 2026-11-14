@@ -462,6 +462,7 @@ func (h *Handler) resolveGitHubUser(
 // (with PKCE validation) and grant_type=refresh_token (with token rotation).
 func (h *Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
+		slog.Warn("token request rejected", "reason", "malformed form body", "error", err)
 		writeOAuthError(w, "invalid_request", "malformed form body", http.StatusBadRequest)
 
 		return
@@ -475,6 +476,7 @@ func (h *Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 	case grantTypeRefreshToken:
 		h.handleRefreshTokenGrant(w, r)
 	default:
+		slog.Warn("token request rejected", "reason", "unsupported grant_type", "grant_type", grantType)
 		writeOAuthError(w, "unsupported_grant_type",
 			"grant_type must be 'authorization_code' or 'refresh_token'",
 			http.StatusBadRequest)
@@ -482,23 +484,27 @@ func (h *Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request) {
-	authCode, valErr := h.validateAuthCodeGrant(r)
+	const msg = "authorization code grant rejected"
+
+	authCode, valErr, cause := h.validateAuthCodeGrant(r)
 	if valErr != nil {
-		writeOAuthError(w, valErr.code, valErr.description, valErr.status)
+		rejectToken(w, msg, r.FormValue("client_id"), valErr, cause)
 
 		return
 	}
 
 	client, err := h.store.GetClient(authCode.ClientID, time.Now())
 	if err != nil {
-		writeOAuthError(w, "invalid_grant", "unknown client", http.StatusBadRequest)
+		rejectToken(w, msg, authCode.ClientID,
+			&oauthValidationError{"invalid_grant", "unknown client", http.StatusBadRequest}, err)
 
 		return
 	}
 
 	if !slices.Contains(client.GrantTypes, grantTypeAuthorizationCode) {
-		writeOAuthError(w, "unauthorized_client",
-			"client is not registered for authorization_code grant", http.StatusBadRequest)
+		rejectToken(w, msg, authCode.ClientID, &oauthValidationError{
+			"unauthorized_client", "client is not registered for authorization_code grant", http.StatusBadRequest,
+		}, nil)
 
 		return
 	}
@@ -506,10 +512,22 @@ func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 	h.issueTokenPair(w, authCode.GitHubUsername, authCode.ClientID, authCode.Scopes, client.GrantTypes)
 }
 
-func (h *Handler) validateAuthCodeGrant(r *http.Request) (*auth.Code, *oauthValidationError) {
+// rejectToken logs a rejected token request at Warn level and writes the OAuth error response.
+// It never logs token values, codes or verifiers; cause (if any) is a store error.
+func rejectToken(w http.ResponseWriter, msg, clientID string, valErr *oauthValidationError, cause error) {
+	attrs := []any{"reason", valErr.code + ": " + valErr.description, "client_id", clientID}
+	if cause != nil {
+		attrs = append(attrs, "error", cause)
+	}
+
+	slog.Warn(msg, attrs...)
+	writeOAuthError(w, valErr.code, valErr.description, valErr.status)
+}
+
+func (h *Handler) validateAuthCodeGrant(r *http.Request) (*auth.Code, *oauthValidationError, error) {
 	p, valErr := extractAuthCodeParams(r)
 	if valErr != nil {
-		return nil, valErr
+		return nil, valErr, nil
 	}
 
 	authCode, err := h.store.ValidateAndConsumeAuthCode(p.code, time.Now(), func(ac *auth.Code) error {
@@ -536,15 +554,15 @@ func (h *Handler) validateAuthCodeGrant(r *http.Request) (*auth.Code, *oauthVali
 	if err != nil {
 		var valErr *oauthValidationError
 		if errors.As(err, &valErr) {
-			return nil, valErr
+			return nil, valErr, nil
 		}
 
 		return nil, &oauthValidationError{
 			"invalid_grant", "authorization code is invalid or expired", http.StatusBadRequest,
-		}
+		}, fmt.Errorf("validating authorization code: %w", err)
 	}
 
-	return authCode, nil
+	return authCode, nil, nil
 }
 
 // authCodeParams holds the validated form parameters for an authorization code grant.
@@ -577,9 +595,11 @@ func extractAuthCodeParams(r *http.Request) (authCodeParams, *oauthValidationErr
 }
 
 func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
-	tokenValue, clientID, valErr := h.validateRefreshTokenGrant(r)
+	const msg = "refresh token grant rejected"
+
+	tokenValue, clientID, valErr, cause := h.validateRefreshTokenGrant(r)
 	if valErr != nil {
-		writeOAuthError(w, valErr.code, valErr.description, valErr.status)
+		rejectToken(w, msg, r.FormValue("client_id"), valErr, cause)
 
 		return
 	}
@@ -588,7 +608,7 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 
 	newRefreshTokenValue, err := auth.IssueRefreshToken()
 	if err != nil {
-		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
+		rejectToken(w, msg, clientID, errInternal(), err)
 
 		return
 	}
@@ -600,13 +620,16 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 
 	refreshTok, err := h.store.RotateRefreshToken(tokenValue, clientID, now, newRefreshToken)
 	if err != nil {
+		valErr := &oauthValidationError{
+			"invalid_grant", "refresh token is invalid or expired", http.StatusBadRequest,
+		}
 		if errors.Is(err, auth.ErrMaxRefreshTokensReached) {
-			writeOAuthError(w, errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable)
-
-			return
+			valErr = &oauthValidationError{
+				errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable,
+			}
 		}
 
-		writeOAuthError(w, "invalid_grant", "refresh token is invalid or expired", http.StatusBadRequest)
+		rejectToken(w, msg, clientID, valErr, err)
 
 		return
 	}
@@ -615,51 +638,62 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 		h.jwtSecret, h.issuer, accessTokenTTL, refreshTok.GitHubUsername, refreshTok.Scopes,
 	)
 	if err != nil {
-		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
+		rejectToken(w, msg, clientID, errInternal(), err)
 
 		return
 	}
 
+	slog.Info("refresh token rotated", "client_id", clientID, "username", refreshTok.GitHubUsername)
 	writeTokenResponse(w, accessToken, newRefreshTokenValue, int(accessTokenTTL.Seconds()))
 }
 
-func (h *Handler) validateRefreshTokenGrant(r *http.Request) (string, string, *oauthValidationError) {
+func errInternal() *oauthValidationError {
+	return &oauthValidationError{errCodeServerError, "internal error", http.StatusInternalServerError}
+}
+
+// validateRefreshTokenGrant validates the refresh grant parameters. On failure it returns the
+// OAuth error and, when a store lookup failed, the underlying cause for logging.
+func (h *Handler) validateRefreshTokenGrant(
+	r *http.Request,
+) (string, string, *oauthValidationError, error) {
 	tokenValue := r.FormValue("refresh_token")
 	if tokenValue == "" {
 		return "", "", &oauthValidationError{
 			"invalid_request", "refresh_token is required", http.StatusBadRequest,
-		}
+		}, nil
 	}
 
 	clientID := r.FormValue("client_id")
 	if clientID == "" {
 		return "", "", &oauthValidationError{
 			"invalid_request", "client_id is required", http.StatusBadRequest,
-		}
+		}, nil
 	}
 
 	client, err := h.store.GetClient(clientID, time.Now())
 	if err != nil {
 		return "", "", &oauthValidationError{
 			"invalid_grant", "unknown client", http.StatusBadRequest,
-		}
+		}, fmt.Errorf("looking up client: %w", err)
 	}
 
 	if !slices.Contains(client.GrantTypes, grantTypeRefreshToken) {
 		return "", "", &oauthValidationError{
 			"unauthorized_client", "client is not registered for refresh_token grant", http.StatusBadRequest,
-		}
+		}, nil
 	}
 
-	return tokenValue, clientID, nil
+	return tokenValue, clientID, nil, nil
 }
 
 func (h *Handler) issueTokenPair(
 	w http.ResponseWriter, username, clientID string, scopes, grantTypes []string,
 ) {
+	const msg = "authorization code grant rejected"
+
 	accessToken, err := auth.IssueAccessToken(h.jwtSecret, h.issuer, accessTokenTTL, username, scopes)
 	if err != nil {
-		writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
+		rejectToken(w, msg, clientID, errInternal(), err)
 
 		return
 	}
@@ -669,7 +703,7 @@ func (h *Handler) issueTokenPair(
 	if slices.Contains(grantTypes, grantTypeRefreshToken) {
 		refreshToken, err = auth.IssueRefreshToken()
 		if err != nil {
-			writeOAuthError(w, errCodeServerError, "internal error", http.StatusInternalServerError)
+			rejectToken(w, msg, clientID, errInternal(), err)
 
 			return
 		}
@@ -681,12 +715,16 @@ func (h *Handler) issueTokenPair(
 			Scopes:        scopes,
 			ExpiresAt:     time.Now().Add(refreshTokenTTL),
 		}); err != nil {
-			writeOAuthError(w, errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable)
+			rejectToken(w, msg, clientID, &oauthValidationError{
+				errCodeServerError, "too many active refresh tokens", http.StatusServiceUnavailable,
+			}, err)
 
 			return
 		}
 	}
 
+	slog.Info("access token issued", "grant_type", grantTypeAuthorizationCode, "client_id", clientID,
+		"username", username, "refresh_token_issued", refreshToken != "")
 	writeTokenResponse(w, accessToken, refreshToken, int(accessTokenTTL.Seconds()))
 }
 
@@ -709,6 +747,7 @@ type registrationResponse struct {
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Warn("client registration rejected", "reason", "malformed JSON body", "error", err)
 		writeOAuthError(w, "invalid_client_metadata", "malformed JSON body", http.StatusBadRequest)
 
 		return
@@ -716,6 +755,7 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	grantTypes, valErr := validateRegistrationRequest(&req)
 	if valErr != nil {
+		slog.Warn("client registration rejected", "reason", valErr.Error(), "client_name", req.ClientName)
 		writeOAuthError(w, "invalid_client_metadata", valErr.Error(), http.StatusBadRequest)
 
 		return
@@ -737,10 +777,15 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = h.store.SaveClient(client); err != nil {
+		slog.Warn("client registration rejected", "reason", "too many registered clients",
+			"client_name", req.ClientName, "error", err)
 		writeOAuthError(w, errCodeServerError, "too many registered clients", http.StatusServiceUnavailable)
 
 		return
 	}
+
+	slog.Info("client registered", "client_id", client.ClientID, "client_name", client.ClientName,
+		"grant_types", client.GrantTypes)
 
 	resp := registrationResponse{
 		ClientID:     client.ClientID,

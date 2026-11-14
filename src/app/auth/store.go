@@ -12,15 +12,20 @@ const (
 	maxAuthCodes     = 10000
 	maxRefreshTokens = 10000
 	clientTTL        = 30 * 24 * time.Hour
+
+	// refreshTokenReuseGrace is how long a rotated refresh token stays usable after its
+	// first rotation. It tolerates concurrent refreshes from several sessions and client
+	// retries after a lost token response, without allowing indefinite reuse.
+	refreshTokenReuseGrace = 60 * time.Second
 )
 
 var (
-	errAuthCodeNotFound      = errors.New("authorization code not found")
-	errAuthCodeExpired       = errors.New("authorization code has expired")
+	errAuthCodeNotFound     = errors.New("authorization code not found")
+	errAuthCodeExpired      = errors.New("authorization code has expired")
 	errRefreshTokenNotFound = errors.New("refresh token not found")
-	errClientNotFound        = errors.New("client not found")
-	errMaxClientsReached     = errors.New("maximum number of registered clients reached")
-	errMaxAuthCodesReached   = errors.New("maximum number of authorization codes reached")
+	errClientNotFound       = errors.New("client not found")
+	errMaxClientsReached    = errors.New("maximum number of registered clients reached")
+	errMaxAuthCodesReached  = errors.New("maximum number of authorization codes reached")
 	// ErrMaxRefreshTokensReached is returned when the refresh token cap is reached.
 	ErrMaxRefreshTokensReached = errors.New("maximum number of refresh tokens reached")
 )
@@ -32,7 +37,7 @@ type Code struct {
 	RedirectURI         string
 	CodeChallenge       string
 	CodeChallengeMethod string
-	GitHubUsername       string
+	GitHubUsername      string
 	Scopes              []string
 	ExpiresAt           time.Time
 }
@@ -41,9 +46,13 @@ type Code struct {
 type RefreshToken struct {
 	Token          string
 	ClientID       string
-	GitHubUsername  string
+	GitHubUsername string
 	Scopes         []string
 	ExpiresAt      time.Time
+	// RotatedAt records when the token was first rotated. Zero means never rotated.
+	// A rotated token remains usable until ExpiresAt, which rotation shortens to
+	// RotatedAt + refreshTokenReuseGrace (never beyond the original expiry).
+	RotatedAt time.Time
 }
 
 // RegisteredClient represents a dynamically registered OAuth client.
@@ -53,6 +62,19 @@ type RegisteredClient struct {
 	ClientName   string
 	GrantTypes   []string
 	CreatedAt    time.Time
+	// LastUsedAt records the last successful refresh token rotation for this client.
+	// The client expires clientTTL after the later of CreatedAt and LastUsedAt.
+	LastUsedAt time.Time
+}
+
+// expiresAt returns the time after which the client registration is considered expired.
+func (c *RegisteredClient) expiresAt() time.Time {
+	last := c.CreatedAt
+	if c.LastUsedAt.After(last) {
+		last = c.LastUsedAt
+	}
+
+	return last.Add(clientTTL)
 }
 
 // Store is a thread-safe in-memory store for OAuth entities.
@@ -124,7 +146,7 @@ func (s *Store) evictExpiredLocked(now time.Time) {
 	}
 
 	for key, client := range s.clients {
-		if now.After(client.CreatedAt.Add(clientTTL)) {
+		if now.After(client.expiresAt()) {
 			delete(s.clients, key)
 		}
 	}
@@ -235,7 +257,8 @@ func (s *Store) SaveRefreshToken(token *RefreshToken) error {
 
 // ConsumeRefreshToken retrieves and deletes a refresh token (rotation).
 // The caller is responsible for saving a new refresh token after consuming the old one.
-// Returns an error if the token is not found, belongs to a different client, or has expired.
+// Returns an error if the token is not found, belongs to a different client, or has expired
+// (including a rotated token whose reuse grace window has passed).
 // The clientID check happens before deletion to prevent an attacker from revoking
 // another client's refresh token by presenting it with a mismatched client_id.
 func (s *Store) ConsumeRefreshToken(token, clientID string, now time.Time) (*RefreshToken, error) {
@@ -260,9 +283,23 @@ func (s *Store) ConsumeRefreshToken(token, clientID string, now time.Time) (*Ref
 	return rt, nil
 }
 
-// RotateRefreshToken atomically consumes the old refresh token and saves a new one.
-// This prevents the window where the old token is consumed but the new one fails to save
-// due to token cap limits. If the new token cannot be saved, the old token remains valid.
+// RotateRefreshToken atomically validates the old refresh token and saves a new one,
+// carrying over the old token's identity fields (ClientID, GitHubUsername, Scopes).
+//
+// The old token is not deleted on its first rotation. Instead it is marked rotated and
+// its expiry is shortened to now + refreshTokenReuseGrace (never extended), so that
+// concurrent refreshes and client retries with the same token within the grace window
+// also succeed, each receiving the supplied new token. After the grace window the old
+// token is rejected with errRefreshTokenNotFound and removed.
+//
+// A client ID mismatch is rejected without mutating anything. When the token cap is
+// reached (after evicting expired entries), a not-yet-rotated old token is replaced
+// in place (deleted, freeing its slot) so the rotation still succeeds, but it loses its
+// grace window; an already-rotated old token yields ErrMaxRefreshTokensReached and the
+// store is left unchanged.
+//
+// On success the registered client's LastUsedAt is updated, extending its lifetime.
+// The returned value is a snapshot of the old token carrying the identity fields.
 func (s *Store) RotateRefreshToken(
 	oldToken, clientID string, now time.Time, newToken *RefreshToken,
 ) (*RefreshToken, error) {
@@ -270,11 +307,7 @@ func (s *Store) RotateRefreshToken(
 	defer s.mu.Unlock()
 
 	rt, ok := s.refreshTokens[oldToken]
-	if !ok {
-		return nil, errRefreshTokenNotFound
-	}
-
-	if rt.ClientID != clientID {
+	if !ok || rt.ClientID != clientID {
 		return nil, errRefreshTokenNotFound
 	}
 
@@ -284,30 +317,64 @@ func (s *Store) RotateRefreshToken(
 		return nil, errRefreshTokenNotFound
 	}
 
-	// Delete the old token first to free a slot, then check the cap for the new one.
-	delete(s.refreshTokens, oldToken)
-
-	// The old token's slot is now free, so we only need to check if we're still at cap
-	// (which can happen if other tokens filled the store concurrently).
+	// The old token keeps its slot during the grace window, so the new token needs a
+	// free slot of its own. Check the cap before mutating anything.
 	if len(s.refreshTokens) >= maxRefreshTokens {
 		s.evictExpiredLocked(now)
 	}
 
-	if len(s.refreshTokens) >= maxRefreshTokens {
-		// Restore the old token so the user doesn't lose their session.
-		s.refreshTokens[oldToken] = rt
-
+	atCap := len(s.refreshTokens) >= maxRefreshTokens
+	if atCap && !rt.RotatedAt.IsZero() {
 		return nil, ErrMaxRefreshTokensReached
 	}
 
-	// Carry over identity fields from the old token.
+	snapshot := *rt
+	snapshot.Scopes = cloneStrings(rt.Scopes)
+
+	if atCap {
+		// No room for a grace entry: fall back to strict rotation, freeing the old slot.
+		delete(s.refreshTokens, oldToken)
+	} else {
+		markRotated(rt, now)
+	}
+
 	newToken.ClientID = rt.ClientID
 	newToken.GitHubUsername = rt.GitHubUsername
 	newToken.Scopes = cloneStrings(rt.Scopes)
 
 	s.refreshTokens[newToken.Token] = newToken
 
-	return rt, nil
+	s.touchClientLocked(rt.ClientID, now)
+
+	return &snapshot, nil
+}
+
+// markRotated marks a refresh token as rotated at now (only on its first rotation) and
+// shortens its expiry to the reuse grace window, never extending the original expiry.
+func markRotated(rt *RefreshToken, now time.Time) {
+	if !rt.RotatedAt.IsZero() {
+		return
+	}
+
+	rt.RotatedAt = now
+
+	graceEnd := now.Add(refreshTokenReuseGrace)
+	if graceEnd.Before(rt.ExpiresAt) {
+		rt.ExpiresAt = graceEnd
+	}
+}
+
+// touchClientLocked records a use of the client at now, extending its sliding lifetime.
+// Expired clients are not revived. The caller must hold s.mu for writing.
+func (s *Store) touchClientLocked(clientID string, now time.Time) {
+	client, ok := s.clients[clientID]
+	if !ok || now.After(client.expiresAt()) {
+		return
+	}
+
+	if now.After(client.LastUsedAt) {
+		client.LastUsedAt = now
+	}
 }
 
 // SaveClient stores a registered client. Returns an error if the maximum number
@@ -346,7 +413,7 @@ func (s *Store) GetClient(clientID string, now time.Time) (*RegisteredClient, er
 		return nil, errClientNotFound
 	}
 
-	if now.After(client.CreatedAt.Add(clientTTL)) {
+	if now.After(client.expiresAt()) {
 		return nil, errClientNotFound
 	}
 
