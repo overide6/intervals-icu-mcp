@@ -1142,11 +1142,7 @@ func TestRotateRefreshToken_ConcurrentSameOldToken(t *testing.T) {
 	)
 
 	for i := range workers {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			nt := &RefreshToken{Token: fmt.Sprintf("conc-new-%d", i), ExpiresAt: now.Add(24 * time.Hour)}
 			news[i] = nt
 
@@ -1156,7 +1152,7 @@ func TestRotateRefreshToken_ConcurrentSameOldToken(t *testing.T) {
 			}
 
 			errs[i] = err
-		}()
+		})
 	}
 
 	wg.Wait()
