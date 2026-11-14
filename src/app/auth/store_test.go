@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func TestSaveAuthCode_And_ValidateAndConsumeAuthCode(t *testing.T) {
 		RedirectURI:         "http://localhost/callback",
 		CodeChallenge:       "challenge",
 		CodeChallengeMethod: "S256",
-		GitHubUsername:       "alice",
+		GitHubUsername:      "alice",
 		Scopes:              []string{"mcp"},
 		ExpiresAt:           now.Add(10 * time.Minute),
 	}
@@ -190,7 +191,7 @@ func TestGetAuthCode_Success(t *testing.T) {
 		RedirectURI:         "http://localhost/callback",
 		CodeChallenge:       "challenge",
 		CodeChallengeMethod: "S256",
-		GitHubUsername:       "alice",
+		GitHubUsername:      "alice",
 		Scopes:              []string{"mcp"},
 		ExpiresAt:           now.Add(10 * time.Minute),
 	}
@@ -307,11 +308,11 @@ func TestSaveRefreshToken_And_ConsumeRefreshToken(t *testing.T) {
 	now := time.Now()
 
 	token := &RefreshToken{
-		Token:         "refresh-token-1",
-		ClientID:      "client-1",
+		Token:          "refresh-token-1",
+		ClientID:       "client-1",
 		GitHubUsername: "bob",
-		Scopes:        []string{"mcp"},
-		ExpiresAt:     now.Add(24 * time.Hour),
+		Scopes:         []string{"mcp"},
+		ExpiresAt:      now.Add(24 * time.Hour),
 	}
 
 	if err := store.SaveRefreshToken(token); err != nil {
@@ -454,11 +455,11 @@ func TestConsumeRefreshToken_ClientIDMismatch(t *testing.T) {
 	now := time.Now()
 
 	token := &RefreshToken{
-		Token:         "rt-client-mismatch",
-		ClientID:      "client-A",
+		Token:          "rt-client-mismatch",
+		ClientID:       "client-A",
 		GitHubUsername: "alice",
-		Scopes:        []string{"mcp"},
-		ExpiresAt:     now.Add(24 * time.Hour),
+		Scopes:         []string{"mcp"},
+		ExpiresAt:      now.Add(24 * time.Hour),
 	}
 
 	if err := store.SaveRefreshToken(token); err != nil {
@@ -488,11 +489,11 @@ func TestRotateRefreshToken_Success(t *testing.T) {
 	now := time.Now()
 
 	oldToken := &RefreshToken{
-		Token:         "old-rt",
-		ClientID:      "client-1",
+		Token:          "old-rt",
+		ClientID:       "client-1",
 		GitHubUsername: "alice",
-		Scopes:        []string{"mcp"},
-		ExpiresAt:     now.Add(24 * time.Hour),
+		Scopes:         []string{"mcp"},
+		ExpiresAt:      now.Add(24 * time.Hour),
 	}
 
 	if err := store.SaveRefreshToken(oldToken); err != nil {
@@ -526,10 +527,24 @@ func TestRotateRefreshToken_Success(t *testing.T) {
 		t.Fatalf("expected new token Scopes [mcp], got %v", newToken.Scopes)
 	}
 
-	// Verify old token is gone.
-	_, err = store.ConsumeRefreshToken("old-rt", "client-1", now)
+	// Verify old token is kept for the grace window, marked rotated with a shortened expiry.
+	stored, ok := storedRefreshToken(store, "old-rt")
+	if !ok {
+		t.Fatal("old token should remain in store during the grace window")
+	}
+
+	if !stored.RotatedAt.Equal(now) {
+		t.Fatalf("expected RotatedAt %v, got %v", now, stored.RotatedAt)
+	}
+
+	if !stored.ExpiresAt.Equal(now.Add(refreshTokenReuseGrace)) {
+		t.Fatalf("expected ExpiresAt now+grace, got %v", stored.ExpiresAt)
+	}
+
+	// After the grace window the old token is rejected.
+	_, err = store.ConsumeRefreshToken("old-rt", "client-1", now.Add(refreshTokenReuseGrace+time.Second))
 	if err != errRefreshTokenNotFound {
-		t.Fatalf("expected old token to be consumed, got %v", err)
+		t.Fatalf("expected old token to be rejected after grace, got %v", err)
 	}
 
 	// Verify new token exists.
@@ -567,10 +582,10 @@ func TestRotateRefreshToken_ClientIDMismatch(t *testing.T) {
 	now := time.Now()
 
 	oldToken := &RefreshToken{
-		Token:         "rt-rotate-mismatch",
-		ClientID:      "client-A",
+		Token:          "rt-rotate-mismatch",
+		ClientID:       "client-A",
 		GitHubUsername: "alice",
-		ExpiresAt:     now.Add(24 * time.Hour),
+		ExpiresAt:      now.Add(24 * time.Hour),
 	}
 
 	if err := store.SaveRefreshToken(oldToken); err != nil {
@@ -605,10 +620,10 @@ func TestRotateRefreshToken_Expired(t *testing.T) {
 	now := time.Now()
 
 	oldToken := &RefreshToken{
-		Token:         "rt-rotate-expired",
-		ClientID:      "client-1",
+		Token:          "rt-rotate-expired",
+		ClientID:       "client-1",
 		GitHubUsername: "alice",
-		ExpiresAt:     now.Add(-1 * time.Hour),
+		ExpiresAt:      now.Add(-1 * time.Hour),
 	}
 
 	if err := store.SaveRefreshToken(oldToken); err != nil {
@@ -649,7 +664,8 @@ func TestRotateRefreshToken_SucceedsAtCapByFreeingSlot(t *testing.T) {
 		}
 	}
 
-	// Rotate filler-0 -> new-rt-cap. Deleting the old token frees exactly one slot,
+	// Rotate filler-0 -> new-rt-cap. At the cap there is no room for a grace entry, so the
+	// store falls back to strict rotation: deleting the old token frees exactly one slot,
 	// allowing the new token to be saved even though the store was at capacity.
 	newToken := &RefreshToken{
 		Token:     "new-rt-cap",
@@ -663,6 +679,497 @@ func TestRotateRefreshToken_SucceedsAtCapByFreeingSlot(t *testing.T) {
 
 	if got.Token != "filler-0" {
 		t.Fatalf("expected old token 'filler-0', got %q", got.Token)
+	}
+
+	if _, ok := storedRefreshToken(store, "filler-0"); ok {
+		t.Fatal("old token should be deleted (no grace) when rotating at the cap")
+	}
+
+	if _, ok := storedRefreshToken(store, "new-rt-cap"); !ok {
+		t.Fatal("new token should be stored")
+	}
+}
+
+func saveTestRefreshToken(t *testing.T, store *Store, rt *RefreshToken) {
+	t.Helper()
+
+	if err := store.SaveRefreshToken(rt); err != nil {
+		t.Fatalf("saving refresh token %q: %v", rt.Token, err)
+	}
+}
+
+func storedRefreshToken(store *Store, token string) (RefreshToken, bool) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	rt, ok := store.refreshTokens[token]
+	if !ok {
+		return RefreshToken{}, false
+	}
+
+	return *rt, true
+}
+
+func TestRotateRefreshToken_ReuseWithinGraceSucceeds(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:          "grace-old",
+		ClientID:       "client-1",
+		GitHubUsername: "alice",
+		Scopes:         []string{"mcp"},
+		ExpiresAt:      now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("grace-old", "client-1", now, &RefreshToken{
+		Token: "grace-new-1", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("first rotation: %v", err)
+	}
+
+	retryAt := now.Add(refreshTokenReuseGrace / 2)
+	second := &RefreshToken{Token: "grace-new-2", ExpiresAt: retryAt.Add(24 * time.Hour)}
+
+	got, err := store.RotateRefreshToken("grace-old", "client-1", retryAt, second)
+	if err != nil {
+		t.Fatalf("reuse within grace should succeed: %v", err)
+	}
+
+	if got.GitHubUsername != "alice" || len(got.Scopes) != 1 || got.Scopes[0] != "mcp" {
+		t.Fatalf("returned token lacks identity fields: %+v", got)
+	}
+
+	if second.ClientID != "client-1" || second.GitHubUsername != "alice" ||
+		len(second.Scopes) != 1 || second.Scopes[0] != "mcp" {
+		t.Fatalf("identity not carried over to second new token: %+v", second)
+	}
+
+	for _, tok := range []string{"grace-new-1", "grace-new-2"} {
+		if _, ok := storedRefreshToken(store, tok); !ok {
+			t.Fatalf("expected %q to be stored", tok)
+		}
+	}
+
+	// The grace window is anchored at the first rotation, not extended by reuse.
+	old, ok := storedRefreshToken(store, "grace-old")
+	if !ok {
+		t.Fatal("old token should still be stored within grace")
+	}
+
+	if !old.RotatedAt.Equal(now) || !old.ExpiresAt.Equal(now.Add(refreshTokenReuseGrace)) {
+		t.Fatalf("grace window should stay anchored at first rotation, got rotatedAt=%v expiresAt=%v",
+			old.RotatedAt, old.ExpiresAt)
+	}
+}
+
+func TestRotateRefreshToken_ReuseAfterGraceFails(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "late-old",
+		ClientID:  "client-1",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("late-old", "client-1", now, &RefreshToken{
+		Token: "late-new-1", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("first rotation: %v", err)
+	}
+
+	late := now.Add(refreshTokenReuseGrace + time.Second)
+
+	_, err := store.RotateRefreshToken("late-old", "client-1", late, &RefreshToken{
+		Token: "late-new-2", ExpiresAt: late.Add(24 * time.Hour),
+	})
+	if err != errRefreshTokenNotFound {
+		t.Fatalf("expected errRefreshTokenNotFound after grace, got %v", err)
+	}
+
+	if _, ok := storedRefreshToken(store, "late-old"); ok {
+		t.Fatal("old token should be removed after grace")
+	}
+
+	if _, ok := storedRefreshToken(store, "late-new-2"); ok {
+		t.Fatal("new token must not be saved on failed rotation")
+	}
+
+	if _, ok := storedRefreshToken(store, "late-new-1"); !ok {
+		t.Fatal("token from the first rotation should remain valid")
+	}
+}
+
+func TestRotateRefreshToken_GraceNeverExtendsExpiry(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+	origExpiry := now.Add(10 * time.Second)
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "short-old",
+		ClientID:  "client-1",
+		ExpiresAt: origExpiry,
+	})
+
+	if _, err := store.RotateRefreshToken("short-old", "client-1", now, &RefreshToken{
+		Token: "short-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	old, ok := storedRefreshToken(store, "short-old")
+	if !ok {
+		t.Fatal("old token should be stored")
+	}
+
+	if !old.ExpiresAt.Equal(origExpiry) {
+		t.Fatalf("expiry must not be extended: want %v, got %v", origExpiry, old.ExpiresAt)
+	}
+}
+
+func TestConsumeRefreshToken_RejectsRotatedTokenAfterGrace(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "consume-rotated",
+		ClientID:  "client-1",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("consume-rotated", "client-1", now, &RefreshToken{
+		Token: "consume-rotated-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	_, err := store.ConsumeRefreshToken("consume-rotated", "client-1", now.Add(refreshTokenReuseGrace+time.Second))
+	if err != errRefreshTokenNotFound {
+		t.Fatalf("expected errRefreshTokenNotFound, got %v", err)
+	}
+}
+
+func TestEvictExpired_EvictsRotatedTokenAfterGrace(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "evict-old",
+		ClientID:  "client-1",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("evict-old", "client-1", now, &RefreshToken{
+		Token: "evict-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	store.evictExpired(now.Add(refreshTokenReuseGrace / 2))
+
+	if _, ok := storedRefreshToken(store, "evict-old"); !ok {
+		t.Fatal("rotated token should survive eviction within grace")
+	}
+
+	store.evictExpired(now.Add(refreshTokenReuseGrace + time.Second))
+
+	if _, ok := storedRefreshToken(store, "evict-old"); ok {
+		t.Fatal("rotated token should be evicted after grace")
+	}
+
+	if _, ok := storedRefreshToken(store, "evict-new"); !ok {
+		t.Fatal("new token should survive eviction")
+	}
+}
+
+func TestRotateRefreshToken_ClientIDMismatchOnRotatedToken(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "mm-old",
+		ClientID:  "client-A",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("mm-old", "client-A", now, &RefreshToken{
+		Token: "mm-new-1", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	before, _ := storedRefreshToken(store, "mm-old")
+	later := now.Add(time.Second)
+
+	_, err := store.RotateRefreshToken("mm-old", "client-B", later, &RefreshToken{
+		Token: "mm-new-2", ExpiresAt: later.Add(24 * time.Hour),
+	})
+	if err != errRefreshTokenNotFound {
+		t.Fatalf("expected errRefreshTokenNotFound for client mismatch, got %v", err)
+	}
+
+	after, ok := storedRefreshToken(store, "mm-old")
+	if !ok || !after.RotatedAt.Equal(before.RotatedAt) || !after.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatalf("mismatch must not mutate the rotated token: before=%+v after=%+v", before, after)
+	}
+
+	if _, ok := storedRefreshToken(store, "mm-new-2"); ok {
+		t.Fatal("new token must not be saved on client mismatch")
+	}
+
+	if _, err := store.RotateRefreshToken("mm-old", "client-A", later, &RefreshToken{
+		Token: "mm-new-3", ExpiresAt: later.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rightful client should still reuse within grace: %v", err)
+	}
+}
+
+func TestRotateRefreshToken_AtCapRejectsReuseOfRotatedToken(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "cap-old",
+		ClientID:  "client-1",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	// Leave exactly one free slot.
+	for i := range maxRefreshTokens - 2 {
+		saveTestRefreshToken(t, store, &RefreshToken{
+			Token:     fmt.Sprintf("cap-filler-%d", i),
+			ClientID:  "client-1",
+			ExpiresAt: now.Add(24 * time.Hour),
+		})
+	}
+
+	if _, err := store.RotateRefreshToken("cap-old", "client-1", now, &RefreshToken{
+		Token: "cap-new-1", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation with one free slot should succeed: %v", err)
+	}
+
+	before, ok := storedRefreshToken(store, "cap-old")
+	if !ok || before.RotatedAt.IsZero() {
+		t.Fatal("old token should be kept and marked rotated when a slot was free")
+	}
+
+	_, err := store.RotateRefreshToken("cap-old", "client-1", now.Add(time.Second), &RefreshToken{
+		Token: "cap-new-2", ExpiresAt: now.Add(24 * time.Hour),
+	})
+	if err != ErrMaxRefreshTokensReached {
+		t.Fatalf("expected ErrMaxRefreshTokensReached, got %v", err)
+	}
+
+	after, ok := storedRefreshToken(store, "cap-old")
+	if !ok || !after.RotatedAt.Equal(before.RotatedAt) || !after.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatal("rejected rotation at cap must not mutate the old token")
+	}
+
+	if _, ok := storedRefreshToken(store, "cap-new-2"); ok {
+		t.Fatal("new token must not be saved when at cap")
+	}
+}
+
+func TestRotateRefreshToken_AtCapEvictsExpiredAndKeepsGrace(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "evcap-old",
+		ClientID:  "client-1",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	for i := range maxRefreshTokens - 1 {
+		saveTestRefreshToken(t, store, &RefreshToken{
+			Token:     fmt.Sprintf("evcap-expired-%d", i),
+			ClientID:  "client-1",
+			ExpiresAt: now.Add(-time.Hour),
+		})
+	}
+
+	if _, err := store.RotateRefreshToken("evcap-old", "client-1", now, &RefreshToken{
+		Token: "evcap-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation should succeed after evicting expired tokens: %v", err)
+	}
+
+	old, ok := storedRefreshToken(store, "evcap-old")
+	if !ok || old.RotatedAt.IsZero() {
+		t.Fatal("old token should be kept with a grace window after eviction freed slots")
+	}
+}
+
+func TestRotateRefreshToken_ExtendsClientLifetime(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	if err := store.SaveClient(&RegisteredClient{
+		ClientID:  "sliding-client",
+		CreatedAt: now.Add(-(clientTTL - 24*time.Hour)),
+	}); err != nil {
+		t.Fatalf("saving client: %v", err)
+	}
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "sliding-rt",
+		ClientID:  "sliding-client",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("sliding-rt", "sliding-client", now, &RefreshToken{
+		Token: "sliding-rt-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	// Past the original CreatedAt-based expiry, but within clientTTL of the rotation.
+	later := now.Add(48 * time.Hour)
+
+	store.evictExpired(later)
+
+	got, err := store.GetClient("sliding-client", later)
+	if err != nil {
+		t.Fatalf("client lifetime should be extended by rotation: %v", err)
+	}
+
+	if !got.LastUsedAt.Equal(now) {
+		t.Fatalf("expected LastUsedAt %v, got %v", now, got.LastUsedAt)
+	}
+
+	if _, err := store.GetClient("sliding-client", now.Add(clientTTL+time.Second)); err != errClientNotFound {
+		t.Fatalf("client should expire clientTTL after last use, got %v", err)
+	}
+}
+
+func TestRotateRefreshToken_DoesNotReviveExpiredClient(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	if err := store.SaveClient(&RegisteredClient{
+		ClientID:  "dead-client",
+		CreatedAt: now.Add(-(clientTTL + time.Hour)),
+	}); err != nil {
+		t.Fatalf("saving client: %v", err)
+	}
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:     "dead-rt",
+		ClientID:  "dead-client",
+		ExpiresAt: now.Add(24 * time.Hour),
+	})
+
+	if _, err := store.RotateRefreshToken("dead-rt", "dead-client", now, &RefreshToken{
+		Token: "dead-rt-new", ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	if _, err := store.GetClient("dead-client", now); err != errClientNotFound {
+		t.Fatalf("expired client must not be revived, got %v", err)
+	}
+}
+
+func TestGetClient_ExpiryUsesLaterOfCreatedAndLastUsed(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore()
+	now := time.Now()
+
+	if err := store.SaveClient(&RegisteredClient{
+		ClientID:   "used-client",
+		CreatedAt:  now.Add(-(clientTTL + time.Hour)),
+		LastUsedAt: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("saving client: %v", err)
+	}
+
+	if _, err := store.GetClient("used-client", now); err != nil {
+		t.Fatalf("recently used client should not be expired: %v", err)
+	}
+
+	if _, err := store.GetClient("used-client", now.Add(clientTTL)); err != errClientNotFound {
+		t.Fatalf("expected errClientNotFound after clientTTL since last use, got %v", err)
+	}
+}
+
+func TestRotateRefreshToken_ConcurrentSameOldToken(t *testing.T) {
+	t.Parallel()
+
+	const workers = 32
+
+	store := NewStore()
+	now := time.Now()
+
+	if err := store.SaveClient(&RegisteredClient{ClientID: "conc-client", CreatedAt: now}); err != nil {
+		t.Fatalf("saving client: %v", err)
+	}
+
+	saveTestRefreshToken(t, store, &RefreshToken{
+		Token:          "conc-old",
+		ClientID:       "conc-client",
+		GitHubUsername: "carol",
+		Scopes:         []string{"mcp"},
+		ExpiresAt:      now.Add(24 * time.Hour),
+	})
+
+	var (
+		wg   sync.WaitGroup
+		errs = make([]error, workers)
+		news = make([]*RefreshToken, workers)
+	)
+
+	for i := range workers {
+		wg.Go(func() {
+			nt := &RefreshToken{Token: fmt.Sprintf("conc-new-%d", i), ExpiresAt: now.Add(24 * time.Hour)}
+			news[i] = nt
+
+			got, err := store.RotateRefreshToken("conc-old", "conc-client", now, nt)
+			if err == nil && (got.GitHubUsername != "carol" || len(got.Scopes) != 1) {
+				err = fmt.Errorf("unexpected returned token %+v", got)
+			}
+
+			errs[i] = err
+		})
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("worker %d: rotation should succeed, got %v", i, err)
+		}
+
+		got, err := store.ConsumeRefreshToken(news[i].Token, "conc-client", now)
+		if err != nil {
+			t.Fatalf("worker %d: new token should be stored: %v", i, err)
+		}
+
+		if got.GitHubUsername != "carol" {
+			t.Fatalf("worker %d: expected username carol, got %q", i, got.GitHubUsername)
+		}
 	}
 }
 

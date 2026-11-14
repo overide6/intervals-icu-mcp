@@ -1196,8 +1196,30 @@ func TestHandleToken_RefreshTokenGrant_TokenRotation(t *testing.T) {
 
 	h.HandleToken(rec2, req2)
 
-	if rec2.Code != http.StatusBadRequest {
-		t.Fatalf("second refresh: expected 400 (token consumed), got %d", rec2.Code)
+	// A rotated refresh token stays usable for a short grace window so that
+	// concurrent refreshes and retried requests do not end the session.
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second refresh within grace window: expected 200, got %d", rec2.Code)
+	}
+
+	var resp1, resp2 struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("decoding first response: %v", err)
+	}
+
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decoding second response: %v", err)
+	}
+
+	if resp1.RefreshToken == "" || resp2.RefreshToken == "" {
+		t.Fatal("expected both refreshes to return a new refresh token")
+	}
+
+	if resp1.RefreshToken == "original-rt" || resp2.RefreshToken == "original-rt" {
+		t.Fatal("expected rotation to issue new refresh token values")
 	}
 }
 
