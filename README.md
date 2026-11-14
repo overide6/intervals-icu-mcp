@@ -97,9 +97,11 @@ go build -ldflags "-X github.com/0xalexb/hjarta-di.Version=1.0.0 -X github.com/0
 | `get_athlete_profile` | Returns the athlete profile from Intervals.icu. | None |
 | `get_activities` | Lists activities in a date range. | `oldest` (required), `newest` (optional) |
 | `get_activity_details` | Returns details for a specific activity. | `activity_id` (required) |
+| `get_activity_streams` | Returns time-series streams of an activity (e.g. time, distance, altitude, heart rate), downsampled. | `activity_id` (required); `types`, `max_points` (optional, default 1000) |
+| `get_activity_intervals` | Returns the laps/intervals of an activity. | `activity_id` (required); `all_fields` (optional) |
 | `get_events` | Lists events in a date range. | `oldest` (required), `newest` (required) |
-| `create_event` | Creates a new event. | `name`, `start_date_local`, `category` (required); `type`, `description`, `moving_time`, `distance`, `training_load` (optional) |
-| `update_event` | Updates an existing event. | `event_id` (required); `name`, `description`, `start_date_local`, `category`, `type`, `moving_time`, `distance`, `training_load` (optional) |
+| `create_event` | Creates a new event. | `name`, `start_date_local`, `category` (required); `type`, `description`, `moving_time`, `distance`, `training_load`, `target` (`AUTO`, `POWER`, `HR`, `PACE`) (optional) |
+| `update_event` | Updates an existing event. | `event_id` (required); `name`, `description`, `start_date_local`, `category`, `type`, `moving_time`, `distance`, `training_load`, `target` (optional) |
 | `delete_event` | Deletes an event by ID. | `event_id` (required) |
 | `get_power_curve` | Returns power curve data by activity type. | `type` (required), `newest` (optional) |
 | `get_wellness` | Returns wellness data for a specific date. | `date` (required) |
