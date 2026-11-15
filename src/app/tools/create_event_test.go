@@ -170,6 +170,14 @@ func TestNewCreateEventTool_WithOptionalFields(t *testing.T) {
 			t.Errorf("expected description=Endurance ride, got: %v", parsed["description"])
 		}
 
+		if parsed["icu_training_load"] != 150.0 {
+			t.Errorf("expected icu_training_load=150, got: %v", parsed["icu_training_load"])
+		}
+
+		if _, ok := parsed["training_load"]; ok {
+			t.Errorf("expected no training_load field in request body, got: %v", parsed["training_load"])
+		}
+
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(responseJSON))
 	}))

@@ -21,20 +21,22 @@ type updateEventArgs struct {
 	Type           string   `json:"type,omitempty"             jsonschema:"sport type (e.g. Ride or Run or Swim)"`
 	MovingTime     *float64 `json:"moving_time,omitempty"      jsonschema:"planned moving time in seconds"`
 	Distance       *float64 `json:"distance,omitempty"         jsonschema:"planned distance in meters"`
-	TrainingLoad   *float64 `json:"training_load,omitempty"    jsonschema:"planned training load (TSS or similar)"`
+	TrainingLoad   *float64 `json:"training_load,omitempty"    jsonschema:"planned training load (Load field)"`
 	Target         string   `json:"target,omitempty"           jsonschema:"step target: AUTO, POWER, HR or PACE"`
 }
 
+// updateEventPayload is the request body sent to the Intervals.icu API. The planned load is sent as
+// icu_training_load, the field Intervals.icu stores it in (shown as "Load" in the calendar editor).
 type updateEventPayload struct {
-	Name           string   `json:"name,omitempty"`
-	Description    string   `json:"description,omitempty"`
-	StartDateLocal string   `json:"start_date_local,omitempty"`
-	Category       string   `json:"category,omitempty"`
-	Type           string   `json:"type,omitempty"`
-	MovingTime     *float64 `json:"moving_time,omitempty"`
-	Distance       *float64 `json:"distance,omitempty"`
-	TrainingLoad   *float64 `json:"training_load,omitempty"`
-	Target         string   `json:"target,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	StartDateLocal  string   `json:"start_date_local,omitempty"`
+	Category        string   `json:"category,omitempty"`
+	Type            string   `json:"type,omitempty"`
+	MovingTime      *float64 `json:"moving_time,omitempty"`
+	Distance        *float64 `json:"distance,omitempty"`
+	IcuTrainingLoad *float64 `json:"icu_training_load,omitempty"`
+	Target          string   `json:"target,omitempty"`
 }
 
 // NewUpdateEventTool returns a ToolRegistration that registers the update_event tool on an MCP server.
@@ -65,15 +67,15 @@ func NewUpdateEventTool(apiClient *intervals.Client) ToolRegistration {
 				}
 
 				payload := updateEventPayload{
-					Name:           args.Name,
-					Description:    args.Description,
-					StartDateLocal: args.StartDateLocal,
-					Category:       args.Category,
-					Type:           args.Type,
-					MovingTime:     args.MovingTime,
-					Distance:       args.Distance,
-					TrainingLoad:   args.TrainingLoad,
-					Target:         args.Target,
+					Name:            args.Name,
+					Description:     args.Description,
+					StartDateLocal:  args.StartDateLocal,
+					Category:        args.Category,
+					Type:            args.Type,
+					MovingTime:      args.MovingTime,
+					Distance:        args.Distance,
+					IcuTrainingLoad: args.TrainingLoad,
+					Target:          args.Target,
 				}
 
 				payloadBytes, err := json.Marshal(payload)

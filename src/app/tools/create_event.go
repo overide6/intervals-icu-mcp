@@ -19,8 +19,36 @@ type createEventArgs struct {
 	Description    string   `json:"description,omitempty"   jsonschema:"event description or notes"`
 	MovingTime     *float64 `json:"moving_time,omitempty"   jsonschema:"planned moving time in seconds"`
 	Distance       *float64 `json:"distance,omitempty"      jsonschema:"planned distance in meters"`
-	TrainingLoad   *float64 `json:"training_load,omitempty" jsonschema:"planned training load (TSS or similar)"`
+	TrainingLoad   *float64 `json:"training_load,omitempty" jsonschema:"planned training load (Load field)"`
 	Target         string   `json:"target,omitempty"        jsonschema:"step target: AUTO, POWER, HR or PACE"`
+}
+
+// createEventPayload is the request body sent to the Intervals.icu API. The planned load is sent as
+// icu_training_load, the field Intervals.icu stores it in (shown as "Load" in the calendar editor).
+type createEventPayload struct {
+	Name            string   `json:"name"`
+	StartDateLocal  string   `json:"start_date_local"`
+	Category        string   `json:"category"`
+	Type            string   `json:"type,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	MovingTime      *float64 `json:"moving_time,omitempty"`
+	Distance        *float64 `json:"distance,omitempty"`
+	IcuTrainingLoad *float64 `json:"icu_training_load,omitempty"`
+	Target          string   `json:"target,omitempty"`
+}
+
+func newCreateEventPayload(args createEventArgs) createEventPayload {
+	return createEventPayload{
+		Name:            args.Name,
+		StartDateLocal:  args.StartDateLocal,
+		Category:        args.Category,
+		Type:            args.Type,
+		Description:     args.Description,
+		MovingTime:      args.MovingTime,
+		Distance:        args.Distance,
+		IcuTrainingLoad: args.TrainingLoad,
+		Target:          args.Target,
+	}
 }
 
 // NewCreateEventTool returns a ToolRegistration that registers the create_event tool on an MCP server.
@@ -59,7 +87,7 @@ func NewCreateEventTool(apiClient *intervals.Client) ToolRegistration {
 					return nil, nil, err
 				}
 
-				payload, err := json.Marshal(args)
+				payload, err := json.Marshal(newCreateEventPayload(args))
 				if err != nil {
 					return nil, nil, fmt.Errorf("marshaling event body: %w", err)
 				}
