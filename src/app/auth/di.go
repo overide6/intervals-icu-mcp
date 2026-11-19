@@ -10,8 +10,8 @@ import (
 var Module = fx.Module("auth", //nolint:gochecknoglobals // fx.Module as package variable is the standard DI pattern.
 	fx.Provide(NewAllowedUsers),
 	fx.Provide(NewValidatedIssuer),
-	fx.Provide(NewJWTSecret),
-	fx.Provide(NewStore),
+	fx.Provide(NewPersistentJWTSecret),
+	fx.Provide(NewPersistentStore),
 	fx.Provide(NewAuthorizationServerMetadata),
 	fx.Provide(NewProtectedResourceMetadata),
 	fx.Provide(NewTokenVerifier),

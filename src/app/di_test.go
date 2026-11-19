@@ -28,6 +28,7 @@ func TestModule_ProvidesServer_Streamable(t *testing.T) {
 		fx.Supply(auth.RawAllowedUsers("")),
 		fx.Supply(auth.RawJWTSecret("")),
 		fx.Supply(auth.RawIssuer("http://localhost:8080")),
+		fx.Supply(auth.StateDir("")),
 		fx.Decorate(func() *intervals.Client { return testClient }),
 		Module,
 		StreamableModules,

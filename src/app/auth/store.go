@@ -77,7 +77,8 @@ func (c *RegisteredClient) expiresAt() time.Time {
 	return last.Add(clientTTL)
 }
 
-// Store is a thread-safe in-memory store for OAuth entities.
+// Store is a thread-safe in-memory store for OAuth entities, optionally backed by a
+// state file (see NewPersistentStore). Refresh tokens are keyed by their SHA-256 hash.
 // It runs a periodic cleanup goroutine to evict expired auth codes, refresh tokens, and clients.
 type Store struct {
 	mu            sync.RWMutex
@@ -86,6 +87,9 @@ type Store struct {
 	clients       map[string]*RegisteredClient
 	stopCleanup   chan struct{}
 	stopOnce      sync.Once
+	// statePath is the file the durable state is written to after every change of
+	// clients or refresh tokens. Empty means in-memory only.
+	statePath string
 }
 
 // NewStore creates a new empty Store.
@@ -127,12 +131,16 @@ func (s *Store) evictExpired(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.evictExpiredLocked(now)
+	if s.evictExpiredLocked(now) {
+		s.persistLocked()
+	}
 }
 
-// evictExpiredLocked is the lock-free version of evictExpired.
-// The caller must hold s.mu.
-func (s *Store) evictExpiredLocked(now time.Time) {
+// evictExpiredLocked is the lock-free version of evictExpired. It reports whether a
+// persisted entity (refresh token or client) was removed. The caller must hold s.mu.
+func (s *Store) evictExpiredLocked(now time.Time) bool {
+	changed := false
+
 	for key, ac := range s.authCodes {
 		if now.After(ac.ExpiresAt) {
 			delete(s.authCodes, key)
@@ -142,14 +150,20 @@ func (s *Store) evictExpiredLocked(now time.Time) {
 	for key, rt := range s.refreshTokens {
 		if now.After(rt.ExpiresAt) {
 			delete(s.refreshTokens, key)
+
+			changed = true
 		}
 	}
 
 	for key, client := range s.clients {
 		if now.After(client.expiresAt()) {
 			delete(s.clients, key)
+
+			changed = true
 		}
 	}
+
+	return changed
 }
 
 // SaveAuthCode stores an authorization code. Returns an error if the maximum number
@@ -250,7 +264,8 @@ func (s *Store) SaveRefreshToken(token *RefreshToken) error {
 		return ErrMaxRefreshTokensReached
 	}
 
-	s.refreshTokens[token.Token] = token
+	s.refreshTokens[hashToken(token.Token)] = token
+	s.persistLocked()
 
 	return nil
 }
@@ -265,7 +280,9 @@ func (s *Store) ConsumeRefreshToken(token, clientID string, now time.Time) (*Ref
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rt, ok := s.refreshTokens[token]
+	key := hashToken(token)
+
+	rt, ok := s.refreshTokens[key]
 	if !ok {
 		return nil, errRefreshTokenNotFound
 	}
@@ -274,7 +291,8 @@ func (s *Store) ConsumeRefreshToken(token, clientID string, now time.Time) (*Ref
 		return nil, errRefreshTokenNotFound
 	}
 
-	delete(s.refreshTokens, token)
+	delete(s.refreshTokens, key)
+	s.persistLocked()
 
 	if now.After(rt.ExpiresAt) {
 		return nil, errRefreshTokenNotFound
@@ -306,13 +324,15 @@ func (s *Store) RotateRefreshToken(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rt, ok := s.refreshTokens[oldToken]
+	oldKey := hashToken(oldToken)
+
+	rt, ok := s.refreshTokens[oldKey]
 	if !ok || rt.ClientID != clientID {
 		return nil, errRefreshTokenNotFound
 	}
 
 	if now.After(rt.ExpiresAt) {
-		delete(s.refreshTokens, oldToken)
+		delete(s.refreshTokens, oldKey)
 
 		return nil, errRefreshTokenNotFound
 	}
@@ -333,7 +353,7 @@ func (s *Store) RotateRefreshToken(
 
 	if atCap {
 		// No room for a grace entry: fall back to strict rotation, freeing the old slot.
-		delete(s.refreshTokens, oldToken)
+		delete(s.refreshTokens, oldKey)
 	} else {
 		markRotated(rt, now)
 	}
@@ -342,9 +362,10 @@ func (s *Store) RotateRefreshToken(
 	newToken.GitHubUsername = rt.GitHubUsername
 	newToken.Scopes = cloneStrings(rt.Scopes)
 
-	s.refreshTokens[newToken.Token] = newToken
+	s.refreshTokens[hashToken(newToken.Token)] = newToken
 
 	s.touchClientLocked(rt.ClientID, now)
+	s.persistLocked()
 
 	return &snapshot, nil
 }
@@ -397,6 +418,7 @@ func (s *Store) SaveClient(client *RegisteredClient) error {
 	cp.GrantTypes = cloneStrings(client.GrantTypes)
 
 	s.clients[cp.ClientID] = &cp
+	s.persistLocked()
 
 	return nil
 }
