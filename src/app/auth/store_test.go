@@ -702,7 +702,7 @@ func storedRefreshToken(store *Store, token string) (RefreshToken, bool) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
-	rt, ok := store.refreshTokens[token]
+	rt, ok := store.refreshTokens[hashToken(token)]
 	if !ok {
 		return RefreshToken{}, false
 	}

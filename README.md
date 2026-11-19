@@ -18,6 +18,7 @@ Set the following environment variables before running the server:
 | `INTERVALS_ATHLETE_ID` | Yes | Your Intervals.icu athlete ID (e.g., `i12345`) |
 | `GITHUB_CLIENT_SECRET` | No | GitHub OAuth app client secret (fallback when `--github-client-secret` flag is empty) |
 | `JWT_SECRET` | No | HMAC-SHA256 signing key for JWT tokens (fallback when `--jwt-secret` flag is empty) |
+| `STATE_DIR` | No | Directory for persisted OAuth state (fallback when `--state-dir` flag is empty) |
 
 ## Usage
 
@@ -56,7 +57,8 @@ The MCP endpoint is served at `/mcp` (not configurable). When using the streamab
 | `--github-client-id` | _(empty)_ | GitHub OAuth app client ID (required for streamable) |
 | `--github-client-secret` | _(empty)_ | GitHub OAuth app client secret (required for streamable; falls back to `GITHUB_CLIENT_SECRET` env var) |
 | `--allowed-users` | _(empty)_ | Comma-separated allowed GitHub usernames (empty = allow all authenticated users) |
-| `--jwt-secret` | _(empty)_ | HMAC-SHA256 signing key for JWT tokens (auto-generated if empty; falls back to `JWT_SECRET` env var) |
+| `--jwt-secret` | _(empty)_ | HMAC-SHA256 signing key for JWT tokens (auto-generated if empty; falls back to `JWT_SECRET` env var). With `--state-dir`, an auto-generated key is stored there and reused after restarts |
+| `--state-dir` | _(empty)_ | Directory where registered OAuth clients and refresh tokens (SHA-256 hashed) are persisted, so connected MCP clients stay logged in across restarts. Empty keeps them in memory only: every restart forces all clients to reconnect. Falls back to `STATE_DIR` env var |
 | `--auth-issuer` | _(empty)_ | Issuer URL for the OAuth authorization server (required for streamable). Must be a full URL with http/https scheme |
 
 ### Authentication (streamable transport)
@@ -122,14 +124,23 @@ Run in streamable mode (default CMD):
 
 ```sh
 docker run --rm -p 8080:8080 \
+  -v intervals-icu-mcp-state:/data \
   -e INTERVALS_API_KEY=... \
   -e INTERVALS_ATHLETE_ID=... \
   -e GITHUB_CLIENT_SECRET=... \
   -e JWT_SECRET=... \
+  -e STATE_DIR=/data \
   ghcr.io/overide6/intervals-icu-mcp:latest \
+  --transport streamable --address 0.0.0.0:8080 \
   --github-client-id <id> \
   --auth-issuer https://mcp.example.com
 ```
+
+Mount a volume at `/data` and set `STATE_DIR=/data` (or `--state-dir /data`) so OAuth
+sessions survive container restarts and image updates. Passing your own arguments replaces
+the image's default `CMD`, which is why `--transport` and `--address` are repeated above.
+The container runs as UID 65534; a named volume inherits the right ownership, a bind mount
+must be writable by that user (e.g. `chown 65534:65534 <host-dir>`).
 
 Run in stdio mode (for MCP clients that manage the process):
 

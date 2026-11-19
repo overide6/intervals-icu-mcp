@@ -30,6 +30,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/intervals-icu-mcp \
       ./src
 
+# Empty state directory, owned by the runtime user so a named volume mounted at /data
+# inherits writable ownership.
+RUN mkdir -p /out/data
+
 FROM scratch
 
 ARG VERSION=dev
@@ -41,10 +45,11 @@ LABEL org.opencontainers.image.version="${VERSION}"
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/intervals-icu-mcp /intervals-icu-mcp
+COPY --from=builder --chown=65534:65534 /out/data /data
 
 USER 65534:65534
 
 EXPOSE 8080
 
 ENTRYPOINT ["/intervals-icu-mcp"]
-CMD ["--transport", "streamable", "--address", "0.0.0.0:8080"]
+CMD ["--transport", "streamable", "--address", "0.0.0.0:8080", "--state-dir", "/data"]
